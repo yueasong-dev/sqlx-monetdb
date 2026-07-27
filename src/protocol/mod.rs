@@ -9,6 +9,8 @@ mod handshake;
 use sqlx_core::error::Error;
 use sqlx_core::net::{connect_tcp, BufferedSocket, Socket, SocketIntoBox};
 
+use crate::error::MonetError;
+
 /// The transport type every MAPI connection is built on: a boxed, buffered
 /// socket, kept runtime-agnostic via `sqlx_core::net`.
 pub(crate) type MonetStream = BufferedSocket<Box<dyn Socket>>;
@@ -80,6 +82,84 @@ pub(crate) async fn read_message(stream: &mut MonetStream) -> Result<Vec<u8>, Er
     }
 }
 
+/// Read a complete MAPI message and decode it as UTF-8 text (the challenge
+/// and login-response lines are always plain text, per
+/// `docs/DEVELOPMENT.md` §4.1).
+async fn read_text_message(stream: &mut MonetStream) -> Result<String, Error> {
+    let bytes = read_message(stream).await?;
+    String::from_utf8(bytes)
+        .map_err(|e| MonetError::Protocol(format!("expected UTF-8 text message: {e}")).into())
+}
+
+/// Perform the full MAPI challenge/response handshake against
+/// `host:port`, following redirects (`docs/DEVELOPMENT.md` §4.1) up to 10
+/// times, and return the authenticated stream ready for query traffic.
+///
+/// Not yet called by public API — stage D's `MonetConnectOptions::connect`
+/// wires this up.
+#[allow(dead_code)]
+pub(crate) async fn perform_handshake(
+    host: &str,
+    port: u16,
+    username: &str,
+    password: &str,
+    database: &str,
+) -> Result<MonetStream, Error> {
+    let mut current_host = host.to_string();
+    let mut current_port = port;
+    let mut reused_stream: Option<MonetStream> = None;
+
+    for _ in 0..10 {
+        let mut stream = match reused_stream.take() {
+            Some(stream) => stream,
+            None => {
+                let mut stream = connect(&current_host, current_port).await?;
+                send_prime_bytes(&mut stream).await?;
+                stream
+            }
+        };
+
+        let challenge_line = read_text_message(&mut stream).await?;
+        let challenge = handshake::parse_challenge(&challenge_line)?;
+
+        let (algo, password_hash) = handshake::compute_password_hash(&challenge, password)?;
+        let login_line = handshake::build_login_response(
+            &challenge,
+            username,
+            algo,
+            &password_hash,
+            database,
+            handshake::HandshakeOptions::default(),
+        );
+        write_message(&mut stream, login_line.as_bytes()).await?;
+
+        let response_line = read_text_message(&mut stream).await?;
+        match handshake::parse_login_response(&response_line) {
+            handshake::LoginResponse::Ok => return Ok(stream),
+            handshake::LoginResponse::Error(message) => {
+                return Err(MonetError::Handshake(message).into())
+            }
+            handshake::LoginResponse::Redirect(target) => {
+                match handshake::parse_redirect(&target)? {
+                    handshake::Redirect::LocalRetry => {
+                        // Same connection, same merger process: just read a
+                        // fresh challenge on the next loop iteration.
+                        reused_stream = Some(stream);
+                    }
+                    handshake::Redirect::Reconnect { host, port } => {
+                        current_host = host;
+                        current_port = port;
+                        // reused_stream stays None: next iteration opens a
+                        // fresh connection to the new address.
+                    }
+                }
+            }
+        }
+    }
+
+    Err(MonetError::Handshake("too many redirects (>10) during handshake".to_string()).into())
+}
+
 #[cfg(all(test, feature = "runtime-tokio"))]
 mod docker_tests {
     use super::*;
@@ -128,5 +208,50 @@ mod docker_tests {
             challenge_text.contains(":mserver:9:") || challenge_text.contains(":merovingian:9:"),
             "unexpected challenge format: {challenge_text:?}"
         );
+    }
+
+    /// Stage C smoke test: the full challenge/response handshake succeeds
+    /// end-to-end against a real MonetDB instance (see the container setup
+    /// notes on the sibling test above; same container, database/user/pass
+    /// are all `monetdb` per `-e MDB_DB_ADMIN_PASS=monetdb`).
+    ///
+    /// Run with: `cargo test --features runtime-tokio -- --ignored`
+    #[tokio::test]
+    #[ignore = "requires a running MonetDB docker instance; see docs/DEVELOPMENT.md stage C step 22"]
+    async fn full_handshake_succeeds_against_docker_monetdb() {
+        let port: u16 = std::env::var("MONETDB_TEST_PORT")
+            .unwrap_or_else(|_| "50001".into())
+            .parse()
+            .expect("MONETDB_TEST_PORT must be a valid u16 port number");
+
+        perform_handshake("127.0.0.1", port, "monetdb", "monetdb", "monetdb")
+            .await
+            .expect("handshake against local docker MonetDB instance should succeed");
+    }
+
+    /// Wrong password must surface as a handshake error, not silently
+    /// succeed or hang.
+    #[tokio::test]
+    #[ignore = "requires a running MonetDB docker instance; see docs/DEVELOPMENT.md stage C step 22"]
+    async fn handshake_with_wrong_password_fails() {
+        let port: u16 = std::env::var("MONETDB_TEST_PORT")
+            .unwrap_or_else(|_| "50001".into())
+            .parse()
+            .expect("MONETDB_TEST_PORT must be a valid u16 port number");
+
+        let result = perform_handshake(
+            "127.0.0.1",
+            port,
+            "monetdb",
+            "definitely-wrong-password",
+            "monetdb",
+        )
+        .await;
+
+        // `MonetStream` doesn't implement `Debug`, so inspect the error side
+        // directly rather than formatting the whole `Result`.
+        if result.is_ok() {
+            panic!("handshake with a wrong password should have failed");
+        }
     }
 }
