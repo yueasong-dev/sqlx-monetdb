@@ -7,24 +7,28 @@ use sqlx_core::transaction::Transaction;
 
 use crate::database::Monet;
 use crate::options::MonetConnectOptions;
+use crate::protocol::MonetStream;
 
 /// A connection to a MonetDB server.
 ///
-/// Stage B implements the underlying TCP/socket connection and MAPI
-/// protocol initialization (handshake, authentication).
-#[derive(Debug)]
+/// Holds the buffered MAPI transport; stage C adds the handshake/auth
+/// state needed to actually establish one (see
+/// `MonetConnectOptions::connect`), and stage D wires up `ping`/`close`.
 pub struct MonetConnection {
-    /// Placeholder for the underlying socket/stream; will be replaced
-    /// with actual I/O structures in stage B.
-    #[allow(dead_code)]
-    _inner: (),
+    pub(crate) stream: MonetStream,
+}
+
+impl std::fmt::Debug for MonetConnection {
+    // `BufferedSocket`/`Box<dyn Socket>` don't implement `Debug`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MonetConnection").finish_non_exhaustive()
+    }
 }
 
 impl MonetConnection {
-    /// Create a new connection (placeholder).
-    #[allow(dead_code)]
-    pub(crate) fn new() -> Self {
-        Self { _inner: () }
+    #[allow(dead_code)] // constructed by stage C once the handshake completes
+    pub(crate) fn new(stream: MonetStream) -> Self {
+        Self { stream }
     }
 }
 
@@ -33,15 +37,15 @@ impl sqlx_core::connection::Connection for MonetConnection {
     type Options = MonetConnectOptions;
 
     fn close(self) -> impl std::future::Future<Output = Result<(), Error>> + Send + 'static {
-        async { unimplemented!("stage B: close socket and send MAPI bye message") }
+        async { unimplemented!("stage D: close socket and send MAPI bye message") }
     }
 
     fn close_hard(self) -> impl std::future::Future<Output = Result<(), Error>> + Send + 'static {
-        async { unimplemented!("stage B: hard close socket without graceful shutdown") }
+        async { unimplemented!("stage D: hard close socket without graceful shutdown") }
     }
 
     fn ping(&mut self) -> impl std::future::Future<Output = Result<(), Error>> + Send + '_ {
-        async { unimplemented!("stage B: send MAPI ping or SELECT 1 to verify connection") }
+        async { unimplemented!("stage D: send a lightweight SELECT 1 to verify the connection") }
     }
 
     fn begin(
@@ -51,15 +55,14 @@ impl sqlx_core::connection::Connection for MonetConnection {
     }
 
     fn shrink_buffers(&mut self) {
-        // Placeholder: no-op for now; stage B will manage actual buffers
-        unimplemented!("stage B: shrink internal connection buffers")
+        self.stream.shrink_buffers();
     }
 
     fn flush(&mut self) -> impl std::future::Future<Output = Result<(), Error>> + Send + '_ {
-        async { unimplemented!("stage B: flush any buffered outgoing data") }
+        async { self.stream.flush().await.map_err(Error::from) }
     }
 
     fn should_flush(&self) -> bool {
-        unimplemented!("stage B: check if connection has buffered data to flush")
+        unimplemented!("stage D: report whether the write buffer has unflushed bytes")
     }
 }

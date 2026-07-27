@@ -32,7 +32,12 @@ fn encode_header(payload_len: usize, is_last: bool) -> [u8; 2] {
 }
 
 /// Decode a single block header into `(payload_len, is_last)`.
-fn decode_header(bytes: [u8; 2]) -> (usize, bool) {
+///
+/// `pub(crate)` (rather than private): [`super::read_message`] reads one
+/// block at a time from the socket and needs this same primitive — it
+/// can't use [`decode_message`], which assumes the full message is
+/// already buffered in memory.
+pub(crate) fn decode_header(bytes: [u8; 2]) -> (usize, bool) {
     let header = u16::from_le_bytes(bytes);
     ((header >> 1) as usize, header & 1 == 1)
 }
