@@ -36,16 +36,28 @@ impl sqlx_core::connection::Connection for MonetConnection {
     type Database = Monet;
     type Options = MonetConnectOptions;
 
-    fn close(self) -> impl std::future::Future<Output = Result<(), Error>> + Send + 'static {
-        async { unimplemented!("stage D: close socket and send MAPI bye message") }
+    fn close(mut self) -> impl std::future::Future<Output = Result<(), Error>> + Send + 'static {
+        // The MAPI reference implementations (pymonetdb, the official C
+        // client) don't send a dedicated logout/bye message on close —
+        // closing the TCP connection is sufficient. Flush first so any
+        // still-buffered writes aren't silently dropped.
+        async move {
+            self.stream.flush().await?;
+            self.stream.shutdown().await.map_err(Error::from)
+        }
     }
 
-    fn close_hard(self) -> impl std::future::Future<Output = Result<(), Error>> + Send + 'static {
-        async { unimplemented!("stage D: hard close socket without graceful shutdown") }
+    fn close_hard(
+        mut self,
+    ) -> impl std::future::Future<Output = Result<(), Error>> + Send + 'static {
+        async move { self.stream.shutdown().await.map_err(Error::from) }
     }
 
     fn ping(&mut self) -> impl std::future::Future<Output = Result<(), Error>> + Send + '_ {
-        async { unimplemented!("stage D: send a lightweight SELECT 1 to verify the connection") }
+        // A real ping needs the query protocol (send "SELECT 1", read the
+        // response) — MAPI has no dedicated ping/heartbeat message
+        // (docs/DEVELOPMENT.md §4.8). Wired up once stage E/G lands.
+        async { unimplemented!("stage E/G: send a lightweight SELECT 1 to verify the connection") }
     }
 
     fn begin(
@@ -63,6 +75,9 @@ impl sqlx_core::connection::Connection for MonetConnection {
     }
 
     fn should_flush(&self) -> bool {
-        unimplemented!("stage D: report whether the write buffer has unflushed bytes")
+        // Every write path in this driver (protocol::write_message) flushes
+        // before returning, so there's never unflushed data sitting in the
+        // buffer between driver-visible operations.
+        false
     }
 }
