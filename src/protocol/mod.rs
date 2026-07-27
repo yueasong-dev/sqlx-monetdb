@@ -3,6 +3,8 @@
 //! See `docs/DEVELOPMENT.md` §4 for the full protocol reference this module
 //! is implemented against.
 
+mod framing;
+
 use sqlx_core::error::Error;
 use sqlx_core::net::{connect_tcp, BufferedSocket, Socket, SocketIntoBox};
 
