@@ -1,0 +1,22 @@
+[package]
+name = "sqlx-monetdb"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Async, pure-Rust MAPI protocol client for MonetDB"
+repository = "https://github.com/yueasong-dev/sqlx-monetdb"
+readme = "README.md"
+keywords = ["database", "sql", "monetdb", "sqlx", "async"]
+categories = ["database"]
+
+[dependencies]
+sqlx-core = { version = "0.9.0", default-features = false }
+
+[features]
+default = []
+runtime-tokio = ["sqlx-core/_rt-tokio"]
+runtime-async-std = ["sqlx-core/_rt-async-std"]
+runtime-smol = ["sqlx-core/_rt-smol"]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
