@@ -5,6 +5,7 @@
 
 mod framing;
 mod handshake;
+mod response;
 
 use sqlx_core::error::Error;
 use sqlx_core::net::{connect_tcp, BufferedSocket, Socket, SocketIntoBox};
@@ -160,6 +161,21 @@ pub(crate) async fn perform_handshake(
     Err(MonetError::Handshake("too many redirects (>10) during handshake".to_string()).into())
 }
 
+/// Send a SQL statement and return its fully-parsed response.
+///
+/// Not yet called by public API — stage F/G's `Executor` impl wires this
+/// up as the basis for `sqlx::query()`.
+#[allow(dead_code)]
+pub(crate) async fn execute_query(
+    stream: &mut MonetStream,
+    sql: &str,
+) -> Result<response::QueryResponse, Error> {
+    let request = response::encode_query(sql);
+    write_message(stream, &request).await?;
+    let text = read_text_message(stream).await?;
+    response::parse_response(&text).map_err(Error::from)
+}
+
 #[cfg(all(test, feature = "runtime-tokio"))]
 mod docker_tests {
     use super::*;
@@ -253,5 +269,121 @@ mod docker_tests {
         if result.is_ok() {
             panic!("handshake with a wrong password should have failed");
         }
+    }
+
+    /// Stage E smoke test: a full CREATE TABLE / INSERT / SELECT / UPDATE /
+    /// DELETE / DROP TABLE cycle against a real MonetDB instance, verifying
+    /// `execute_query` + `response::parse_response` end-to-end — not just
+    /// against synthetic text, against the server's real wire output.
+    #[tokio::test]
+    #[ignore = "requires a running MonetDB docker instance; see docs/DEVELOPMENT.md stage E"]
+    async fn full_crud_cycle_against_docker_monetdb() {
+        let port: u16 = std::env::var("MONETDB_TEST_PORT")
+            .unwrap_or_else(|_| "50001".into())
+            .parse()
+            .expect("MONETDB_TEST_PORT must be a valid u16 port number");
+
+        let mut stream = perform_handshake("127.0.0.1", port, "monetdb", "monetdb", "monetdb")
+            .await
+            .expect("handshake should succeed");
+
+        // Clean slate: ignore failure (table may not exist yet).
+        let _ = execute_query(&mut stream, "DROP TABLE sqlx_monetdb_crud_test").await;
+
+        let schema = execute_query(
+            &mut stream,
+            "CREATE TABLE sqlx_monetdb_crud_test (id INT, name VARCHAR(50), price DECIMAL(10,2))",
+        )
+        .await
+        .expect("CREATE TABLE should succeed");
+        assert_eq!(schema, response::QueryResponse::Schema);
+
+        let insert = execute_query(
+            &mut stream,
+            "INSERT INTO sqlx_monetdb_crud_test VALUES (1, 'widget', 9.99), (2, 'gadget', 19.50)",
+        )
+        .await
+        .expect("INSERT should succeed");
+        assert_eq!(
+            insert,
+            response::QueryResponse::Update {
+                affected: 2,
+                last_insert_id: None
+            }
+        );
+
+        let select = execute_query(
+            &mut stream,
+            "SELECT id, name, price FROM sqlx_monetdb_crud_test ORDER BY id",
+        )
+        .await
+        .expect("SELECT should succeed");
+        let response::QueryResponse::Table(table) = select else {
+            panic!("expected a Table response");
+        };
+        assert_eq!(table.row_count, 2);
+        assert_eq!(table.columns.len(), 3);
+        assert_eq!(table.columns[0].name, "id");
+        assert_eq!(table.columns[1].name, "name");
+        assert_eq!(table.columns[2].name, "price");
+        assert_eq!(table.columns[2].type_name, "decimal");
+        // Real MonetDB sends `length`, not `typesizes`, even with
+        // size_header=1 negotiated — see response::ColumnMeta's doc
+        // comment for the full correction.
+        assert_eq!(table.columns[2].length, Some(12));
+        assert_eq!(table.columns[2].typesizes, None);
+        assert_eq!(
+            table.rows,
+            vec![
+                vec![
+                    Some("1".to_string()),
+                    Some("widget".to_string()),
+                    Some("9.99".to_string())
+                ],
+                vec![
+                    Some("2".to_string()),
+                    Some("gadget".to_string()),
+                    Some("19.50".to_string())
+                ],
+            ]
+        );
+
+        let update = execute_query(
+            &mut stream,
+            "UPDATE sqlx_monetdb_crud_test SET price = 12.00 WHERE id = 1",
+        )
+        .await
+        .expect("UPDATE should succeed");
+        assert_eq!(
+            update,
+            response::QueryResponse::Update {
+                affected: 1,
+                last_insert_id: None
+            }
+        );
+
+        let delete = execute_query(
+            &mut stream,
+            "DELETE FROM sqlx_monetdb_crud_test WHERE id = 2",
+        )
+        .await
+        .expect("DELETE should succeed");
+        assert_eq!(
+            delete,
+            response::QueryResponse::Update {
+                affected: 1,
+                last_insert_id: None
+            }
+        );
+
+        let error = execute_query(&mut stream, "SELECT * FROM no_such_table_at_all")
+            .await
+            .expect_err("querying a nonexistent table should fail");
+        // Confirm it surfaced as a database error, not a protocol error.
+        assert!(matches!(error, sqlx_core::error::Error::Database(_)));
+
+        execute_query(&mut stream, "DROP TABLE sqlx_monetdb_crud_test")
+            .await
+            .expect("cleanup DROP TABLE should succeed");
     }
 }
