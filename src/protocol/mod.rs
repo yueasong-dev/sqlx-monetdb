@@ -78,3 +78,54 @@ pub(crate) async fn read_message(stream: &mut MonetStream) -> Result<Vec<u8>, Er
         }
     }
 }
+
+#[cfg(all(test, feature = "runtime-tokio"))]
+mod docker_tests {
+    use super::*;
+
+    /// Smoke test for stage B: plain TCP connect + prime bytes + reading
+    /// the server's raw (unparsed) challenge message end-to-end, against a
+    /// real MonetDB instance. Parsing the challenge itself is stage C's job
+    /// (`docs/DEVELOPMENT.md` step 15) — this only proves the transport and
+    /// block-framing read path work against the real wire format.
+    ///
+    /// Requires a running MonetDB instance (see `docs/ACCEPTANCE.md` — the
+    /// image requires `MDB_DB_ADMIN_PASS` or it exits immediately):
+    /// ```sh
+    /// docker run -d --name monetdb-test -p 50001:50000 \
+    ///     -e MDB_DB_ADMIN_PASS=monetdb monetdb/monetdb:latest
+    /// ```
+    /// Override the port with `MONETDB_TEST_PORT` if 50001 is taken.
+    ///
+    /// Run with: `cargo test --features runtime-tokio -- --ignored`
+    #[tokio::test]
+    #[ignore = "requires a running MonetDB docker instance; see docs/DEVELOPMENT.md stage B step 14"]
+    async fn connects_and_reads_raw_challenge_from_docker_monetdb() {
+        let port: u16 = std::env::var("MONETDB_TEST_PORT")
+            .unwrap_or_else(|_| "50001".into())
+            .parse()
+            .expect("MONETDB_TEST_PORT must be a valid u16 port number");
+
+        let mut stream = connect("127.0.0.1", port)
+            .await
+            .expect("TCP connect to local MonetDB docker instance failed");
+
+        send_prime_bytes(&mut stream)
+            .await
+            .expect("failed to send MAPI prime bytes");
+
+        let challenge = read_message(&mut stream)
+            .await
+            .expect("failed to read raw challenge message");
+
+        assert!(!challenge.is_empty(), "expected a non-empty challenge line");
+        let challenge_text = String::from_utf8(challenge).expect("challenge should be valid UTF-8");
+
+        // Challenge format: salt:servertype:protover:hashes:endian:serverhash:...
+        // (docs/DEVELOPMENT.md §4.1). protover must be 9.
+        assert!(
+            challenge_text.contains(":mserver:9:") || challenge_text.contains(":merovingian:9:"),
+            "unexpected challenge format: {challenge_text:?}"
+        );
+    }
+}
