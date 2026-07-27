@@ -7,4 +7,25 @@
 
 mod error;
 
+mod arguments;
+mod column;
+mod connection;
+mod database;
+mod options;
+mod row;
+mod statement;
+mod transaction;
+mod type_info;
+mod value;
+
+pub use arguments::MonetArguments;
+pub use column::MonetColumn;
+pub use connection::MonetConnection;
+pub use database::{Monet, MonetQueryResult};
 pub use error::{MonetDatabaseError, MonetError};
+pub use options::MonetConnectOptions;
+pub use row::MonetRow;
+pub use statement::MonetStatement;
+pub use transaction::MonetTransactionManager;
+pub use type_info::MonetTypeInfo;
+pub use value::{MonetValue, MonetValueRef};
