@@ -12,6 +12,7 @@ mod column;
 mod connection;
 mod database;
 mod options;
+mod protocol;
 mod row;
 mod statement;
 mod transaction;
