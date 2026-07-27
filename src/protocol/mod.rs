@@ -25,6 +25,21 @@ pub(crate) async fn connect(host: &str, port: u16) -> Result<MonetStream, Error>
     Ok(BufferedSocket::new(socket))
 }
 
+/// Send the MAPI "prime" bytes: 8 null bytes written before the server's
+/// challenge line on a plain (non-TLS) connection.
+///
+/// This is a historical technique (present in both pymonetdb and the
+/// official C client) to avoid hanging if the client accidentally connects
+/// to a TLS-only endpoint; the server ignores these bytes. See
+/// `docs/DEVELOPMENT.md` §4.1.
+// Not yet called: wired up once stage C's handshake sequencing lands.
+#[allow(dead_code)]
+pub(crate) async fn send_prime_bytes(stream: &mut MonetStream) -> Result<(), Error> {
+    stream.write_buffer_mut().put_slice(&[0u8; 8]);
+    stream.flush().await?;
+    Ok(())
+}
+
 /// Send a complete MAPI message, splitting it into blocks per
 /// `docs/DEVELOPMENT.md` §4.2 and flushing the underlying socket.
 // Not yet called: wired up once stage C sends the handshake response and
