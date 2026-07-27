@@ -4,3 +4,7 @@
 //!
 //! This crate is under active development; see the project README for
 //! current status.
+
+mod error;
+
+pub use error::{MonetDatabaseError, MonetError};
