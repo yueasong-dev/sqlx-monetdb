@@ -4,6 +4,7 @@
 //! is implemented against.
 
 mod framing;
+mod handshake;
 
 use sqlx_core::error::Error;
 use sqlx_core::net::{connect_tcp, BufferedSocket, Socket, SocketIntoBox};
