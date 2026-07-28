@@ -1,41 +1,22 @@
 //! Values and references to values from MonetDB result sets.
+//!
+//! MAPI is a text protocol (`docs/DEVELOPMENT.md` §4.3-4.5): every field
+//! arrives as a parsed `Option<String>` (`None` = SQL NULL) courtesy of
+//! `protocol::response`. Decoding into Rust types (`src/types/`) works
+//! from that text representation directly rather than raw bytes.
 
 use std::borrow::Cow;
+
+use sqlx_core::error::{BoxDynError, UnexpectedNullError};
 
 use crate::database::Monet;
 use crate::type_info::MonetTypeInfo;
 
 /// An owned value from a MonetDB result set.
-///
-/// This is a placeholder that stores the raw bytes and type information.
-/// Stage F will implement actual decoding logic.
 #[derive(Debug, Clone)]
 pub struct MonetValue {
-    /// The raw data bytes from the server.
-    #[allow(dead_code)]
-    data: Option<Vec<u8>>,
-    /// Type information for this value; will be populated when stage F decodes the row.
+    data: Option<String>,
     type_info: MonetTypeInfo,
-}
-
-impl MonetValue {
-    /// Create a new NULL value with the given type.
-    #[allow(dead_code)]
-    pub(crate) fn null(type_info: MonetTypeInfo) -> Self {
-        Self {
-            data: None,
-            type_info,
-        }
-    }
-
-    /// Create a new value with the given data and type.
-    #[allow(dead_code)]
-    pub(crate) fn new(data: Vec<u8>, type_info: MonetTypeInfo) -> Self {
-        Self {
-            data: Some(data),
-            type_info,
-        }
-    }
 }
 
 impl sqlx_core::value::Value for MonetValue {
@@ -60,16 +41,11 @@ impl sqlx_core::value::Value for MonetValue {
 /// A reference to a value from a MonetDB result set.
 #[derive(Debug)]
 pub struct MonetValueRef<'r> {
-    /// A reference to the raw data bytes, or None if NULL.
-    #[allow(dead_code)]
-    data: Option<&'r [u8]>,
-    /// Type information for this value.
+    data: Option<&'r str>,
     type_info: &'r MonetTypeInfo,
 }
 
 impl<'r> MonetValueRef<'r> {
-    /// Create a reference to a NULL value.
-    #[allow(dead_code)]
     pub(crate) fn null(type_info: &'r MonetTypeInfo) -> Self {
         Self {
             data: None,
@@ -77,13 +53,21 @@ impl<'r> MonetValueRef<'r> {
         }
     }
 
-    /// Create a reference to a value with data.
-    #[allow(dead_code)]
-    pub(crate) fn new(data: &'r [u8], type_info: &'r MonetTypeInfo) -> Self {
+    pub(crate) fn new(data: &'r str, type_info: &'r MonetTypeInfo) -> Self {
         Self {
             data: Some(data),
             type_info,
         }
+    }
+
+    /// The raw MAPI text representation of this value. Errors (rather
+    /// than silently mis-decoding) if the value is NULL — used by the
+    /// `Decode` impls in `src/types/`, none of which can represent NULL
+    /// directly (sqlx's blanket `Decode` for `Option<T>` checks
+    /// `is_null()` beforehand and only calls `T::decode` when non-null).
+    pub(crate) fn text(&self) -> Result<&'r str, BoxDynError> {
+        self.data
+            .ok_or_else(|| Box::new(UnexpectedNullError) as BoxDynError)
     }
 }
 
@@ -92,7 +76,7 @@ impl<'r> sqlx_core::value::ValueRef<'r> for MonetValueRef<'r> {
 
     fn to_owned(&self) -> <Monet as sqlx_core::database::Database>::Value {
         MonetValue {
-            data: self.data.map(|d| d.to_vec()),
+            data: self.data.map(str::to_string),
             type_info: self.type_info.clone(),
         }
     }

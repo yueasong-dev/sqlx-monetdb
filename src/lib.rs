@@ -12,11 +12,12 @@ mod column;
 mod connection;
 mod database;
 mod options;
-mod protocol;
+pub(crate) mod protocol;
 mod row;
 mod statement;
 mod transaction;
 mod type_info;
+mod types;
 mod value;
 
 pub use arguments::MonetArguments;
