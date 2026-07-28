@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "Async, pure-Rust MAPI protocol client for MonetDB"
+homepage = "https://github.com/yueasong-dev/sqlx-monetdb"
 repository = "https://github.com/yueasong-dev/sqlx-monetdb"
 readme = "README.md"
 keywords = ["database", "sql", "monetdb", "sqlx", "async"]
