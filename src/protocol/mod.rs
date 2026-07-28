@@ -5,7 +5,7 @@
 
 mod framing;
 mod handshake;
-mod response;
+pub(crate) mod response;
 
 use sqlx_core::error::Error;
 use sqlx_core::net::{connect_tcp, BufferedSocket, Socket, SocketIntoBox};
