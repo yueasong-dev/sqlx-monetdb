@@ -1,27 +1,27 @@
 //! Column information for MonetDB result sets.
 
 use crate::database::Monet;
+use crate::protocol::response::ColumnMeta;
 use crate::type_info::MonetTypeInfo;
 
 /// Column information from a MonetDB result set.
 #[derive(Debug, Clone)]
 pub struct MonetColumn {
-    /// The ordinal position of this column in the result set.
     ordinal: usize,
-    /// The column name.
     name: String,
-    /// The type information for this column.
     type_info: MonetTypeInfo,
 }
 
 impl MonetColumn {
-    /// Create a new column with the given name and type info.
+    /// Build column metadata from a parsed `%`-header entry
+    /// (`docs/DEVELOPMENT.md` §4.3-4.4).
+    // Not yet called: wired up by stage G's Executor.
     #[allow(dead_code)]
-    pub(crate) fn new(ordinal: usize, name: impl Into<String>, type_info: MonetTypeInfo) -> Self {
+    pub(crate) fn from_meta(ordinal: usize, meta: &ColumnMeta) -> Self {
         Self {
             ordinal,
-            name: name.into(),
-            type_info,
+            name: meta.name.clone(),
+            type_info: MonetTypeInfo::new(meta.type_name.clone()),
         }
     }
 }
