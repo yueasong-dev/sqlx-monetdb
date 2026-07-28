@@ -1,4 +1,5 @@
 use sqlx_core::decode::Decode;
+use sqlx_core::encode::{Encode, IsNull};
 use sqlx_core::error::BoxDynError;
 use sqlx_core::types::Type;
 
@@ -28,6 +29,13 @@ impl<'r> Decode<'r, Monet> for bool {
     }
 }
 
+impl<'q> Encode<'q, Monet> for bool {
+    fn encode_by_ref(&self, buf: &mut Vec<u8>) -> Result<IsNull, BoxDynError> {
+        buf.extend_from_slice(if *self { b"true" } else { b"false" });
+        Ok(IsNull::No)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -44,5 +52,14 @@ mod tests {
     fn rejects_garbage() {
         let ty = MonetTypeInfo::new("boolean");
         assert!(bool::decode(MonetValueRef::new("nope", &ty)).is_err());
+    }
+
+    #[test]
+    fn encode_round_trips_through_decode() {
+        let ty = MonetTypeInfo::new("boolean");
+        let mut buf = Vec::new();
+        let _ = true.encode_by_ref(&mut buf).unwrap();
+        let text = String::from_utf8(buf).unwrap();
+        assert!(bool::decode(MonetValueRef::new(&text, &ty)).unwrap());
     }
 }
