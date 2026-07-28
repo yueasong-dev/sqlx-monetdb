@@ -95,10 +95,7 @@ async fn read_text_message(stream: &mut MonetStream) -> Result<String, Error> {
 /// Perform the full MAPI challenge/response handshake against
 /// `host:port`, following redirects (`docs/DEVELOPMENT.md` §4.1) up to 10
 /// times, and return the authenticated stream ready for query traffic.
-///
-/// Not yet called by public API — stage D's `MonetConnectOptions::connect`
-/// wires this up.
-#[allow(dead_code)]
+/// Used by `MonetConnectOptions::connect`.
 pub(crate) async fn perform_handshake(
     host: &str,
     port: u16,
@@ -136,7 +133,20 @@ pub(crate) async fn perform_handshake(
 
         let response_line = read_text_message(&mut stream).await?;
         match handshake::parse_login_response(&response_line) {
-            handshake::LoginResponse::Ok => return Ok(stream),
+            handshake::LoginResponse::Ok => {
+                // **Real-world correction**: declaring `reply_size=-1` in
+                // the handshake login line (per HandshakeOptions) alone
+                // was NOT enough — verified against a real 5000-row
+                // query, results were still truncated to 100 rows. Only
+                // sending it again as a runtime `Xreply_size -1` command
+                // after login (matching pymonetdb's `_change_replysize`,
+                // which does the same) actually takes effect. Keep both:
+                // the handshake option costs nothing and may matter on
+                // other server versions.
+                write_message(&mut stream, b"Xreply_size -1").await?;
+                read_text_message(&mut stream).await?;
+                return Ok(stream);
+            }
             handshake::LoginResponse::Error(message) => {
                 return Err(MonetError::Handshake(message).into())
             }
