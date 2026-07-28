@@ -25,13 +25,16 @@ let rows = Executor::fetch_all(&mut conn, "SELECT id, name FROM users").await?;
 
 ## Why this exists
 
-MonetDB — a column-store analytical database used for OLAP/data-warehouse workloads — currently has no production-grade async Rust driver:
+**The problem: Rust cannot talk to MonetDB natively.** MonetDB is a widely used open-source column-store database for OLAP/data-warehouse workloads — but until this project, no async Rust application could connect to it without either dropping into unsafe FFI or being stuck on an abandoned, incomplete driver. That's a hard blocker for any Rust service — data pipelines, analytics backends, internal tooling — that needs to query a MonetDB instance.
 
-- The only existing Rust client (`monetdb`, under the official `MonetDB` GitHub org) is early-stage, has seen no updates since October 2024, and is missing most of the protocol (types, prepared statements, transactions).
-- There's no MonetDB driver for SQLx at all — MonetDB is invisible to the large ecosystem of Rust services already standardized on SQLx's `Pool`/`Row`/`Executor` API.
-- The only other path is FFI into the official C client (`libmonetdb5`/`mapi.c`), which means a C dependency, a blocked async runtime, and no memory-safety guarantee at the FFI boundary.
+Concretely, before `sqlx-monetdb`, every Rust project needing MonetDB had exactly two bad options:
 
-`sqlx-monetdb` implements the MAPI protocol — handshake/auth, block framing, the simple query protocol, result decoding — natively in Rust, wired into SQLx's `Database` trait family so it's a first-class citizen next to `sqlx-postgres` and `sqlx-mysql`.
+- **The existing `monetdb` crate** (under the official `MonetDB` GitHub org) is early-stage, has seen no updates since October 2024, and is missing most of the protocol — types, prepared statements, transactions.
+- **FFI into the official C client** (`libmonetdb5`/`mapi.c`) — which means a C toolchain dependency for every build/cross-compile target, a blocked async runtime during I/O, and no memory-safety guarantee at the FFI boundary.
+
+Neither is acceptable for a modern async Rust codebase, and neither integrates with SQLx — the ecosystem's de facto standard for talking to Postgres/MySQL/SQLite — so any team already standardized on `sqlx::Pool`/`Row`/`Executor` had no consistent way to add MonetDB to that mix.
+
+**What this project solves**: `sqlx-monetdb` implements MonetDB's MAPI wire protocol — handshake/auth, block framing, the query protocol, result decoding — natively in safe Rust, with zero C dependencies, and wires it directly into SQLx's `Database` trait family. The result is that MonetDB becomes a first-class SQLx citizen, sitting right next to `sqlx-postgres` and `sqlx-mysql`: same `Pool`, same `Executor`, same async ergonomics, one dependency less to cross-compile.
 
 ## Built differently: verified against reality, not assumptions
 
