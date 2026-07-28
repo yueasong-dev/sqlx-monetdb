@@ -1,4 +1,5 @@
 use sqlx_core::decode::Decode;
+use sqlx_core::encode::{Encode, IsNull};
 use sqlx_core::error::BoxDynError;
 use sqlx_core::types::Type;
 
@@ -22,6 +23,13 @@ macro_rules! impl_float_type {
         impl<'r> Decode<'r, Monet> for $rust_ty {
             fn decode(value: MonetValueRef<'r>) -> Result<Self, BoxDynError> {
                 Ok(value.text()?.parse::<$rust_ty>()?)
+            }
+        }
+
+        impl<'q> Encode<'q, Monet> for $rust_ty {
+            fn encode_by_ref(&self, buf: &mut Vec<u8>) -> Result<IsNull, BoxDynError> {
+                buf.extend_from_slice(self.to_string().as_bytes());
+                Ok(IsNull::No)
             }
         }
     };

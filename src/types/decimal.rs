@@ -1,5 +1,6 @@
 use rust_decimal::Decimal;
 use sqlx_core::decode::Decode;
+use sqlx_core::encode::{Encode, IsNull};
 use sqlx_core::error::BoxDynError;
 use sqlx_core::types::Type;
 
@@ -26,6 +27,13 @@ impl<'r> Decode<'r, Monet> for Decimal {
         // "9.99") already encodes the scale via its decimal point
         // position, which `Decimal::from_str` parses directly.
         Ok(value.text()?.parse::<Decimal>()?)
+    }
+}
+
+impl<'q> Encode<'q, Monet> for Decimal {
+    fn encode_by_ref(&self, buf: &mut Vec<u8>) -> Result<IsNull, BoxDynError> {
+        buf.extend_from_slice(self.to_string().as_bytes());
+        Ok(IsNull::No)
     }
 }
 

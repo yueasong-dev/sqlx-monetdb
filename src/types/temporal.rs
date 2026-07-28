@@ -1,5 +1,6 @@
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use sqlx_core::decode::Decode;
+use sqlx_core::encode::{Encode, IsNull};
 use sqlx_core::error::BoxDynError;
 use sqlx_core::types::Type;
 
@@ -29,6 +30,16 @@ impl<'r> Decode<'r, Monet> for NaiveDate {
     }
 }
 
+impl<'q> Encode<'q, Monet> for NaiveDate {
+    fn encode_by_ref(&self, buf: &mut Vec<u8>) -> Result<IsNull, BoxDynError> {
+        // Explicit `DATE '...'` cast prefix (matching pymonetdb's
+        // monetize.py convention) rather than a bare string literal, to
+        // avoid relying on implicit cast behavior in every query context.
+        buf.extend_from_slice(format!("DATE '{}'", self.format("%Y-%m-%d")).as_bytes());
+        Ok(IsNull::No)
+    }
+}
+
 impl Type<Monet> for NaiveTime {
     fn type_info() -> MonetTypeInfo {
         MonetTypeInfo::new("time")
@@ -42,6 +53,13 @@ impl Type<Monet> for NaiveTime {
 impl<'r> Decode<'r, Monet> for NaiveTime {
     fn decode(value: MonetValueRef<'r>) -> Result<Self, BoxDynError> {
         Ok(NaiveTime::parse_from_str(value.text()?, "%H:%M:%S%.f")?)
+    }
+}
+
+impl<'q> Encode<'q, Monet> for NaiveTime {
+    fn encode_by_ref(&self, buf: &mut Vec<u8>) -> Result<IsNull, BoxDynError> {
+        buf.extend_from_slice(format!("TIME '{}'", self.format("%H:%M:%S%.f")).as_bytes());
+        Ok(IsNull::No)
     }
 }
 
@@ -61,6 +79,15 @@ impl<'r> Decode<'r, Monet> for NaiveDateTime {
             value.text()?,
             "%Y-%m-%d %H:%M:%S%.f",
         )?)
+    }
+}
+
+impl<'q> Encode<'q, Monet> for NaiveDateTime {
+    fn encode_by_ref(&self, buf: &mut Vec<u8>) -> Result<IsNull, BoxDynError> {
+        buf.extend_from_slice(
+            format!("TIMESTAMP '{}'", self.format("%Y-%m-%d %H:%M:%S%.f")).as_bytes(),
+        );
+        Ok(IsNull::No)
     }
 }
 
