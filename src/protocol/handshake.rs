@@ -157,19 +157,29 @@ pub(crate) fn compute_password_hash(
 }
 
 /// Handshake options the client may negotiate (`docs/DEVELOPMENT.md` §4.1
-/// levels 1-5). v1 only sends levels 1 (`auto_commit`) and 3
-/// (`size_header`, always on so the driver can read column
-/// precision/scale/length from `%...#typesizes`) — levels 2, 4, 5
-/// (`reply_size`, `columnar_protocol`, `time_zone`) are left at the
-/// server's defaults for now.
+/// levels 1-5). v1 sends levels 1 (`auto_commit`), 2 (`reply_size`), and 3
+/// (`size_header`, so the driver can read column length metadata from
+/// `%...#length`) — levels 4, 5 (`columnar_protocol`, `time_zone`) are
+/// left at the server's defaults for now.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct HandshakeOptions {
     pub auto_commit: bool,
+    /// Rows returned per response. **Must be `-1`** ("unlimited",
+    /// confirmed against pymonetdb's documented `reply_size` semantics)
+    /// unless the driver implements `Xexport` pagination — the server's
+    /// own default is a mere **100**, and this driver has no pagination,
+    /// so anything else silently truncates every result set over 100
+    /// rows with no error. Verified against a real 5000-row query: with
+    /// this unset, exactly 100 rows came back.
+    pub reply_size: i64,
 }
 
 impl Default for HandshakeOptions {
     fn default() -> Self {
-        Self { auto_commit: true }
+        Self {
+            auto_commit: true,
+            reply_size: -1,
+        }
     }
 }
 
@@ -202,6 +212,9 @@ pub(crate) fn build_login_response(
     let level = challenge.handshake_option_level.unwrap_or(0);
     if level >= 1 {
         parts.push(format!("auto_commit={}", i32::from(options.auto_commit)));
+    }
+    if level >= 2 {
+        parts.push(format!("reply_size={}", options.reply_size));
     }
     if level >= 3 {
         parts.push("size_header=1".to_string());
@@ -401,17 +414,25 @@ mod tests {
             "SHA1",
             "deadbeef",
             "monetdb",
-            HandshakeOptions { auto_commit: true },
+            HandshakeOptions {
+                auto_commit: true,
+                reply_size: -1,
+            },
         );
 
         assert!(response.starts_with("BIG:monetdb:{SHA1}deadbeef:sql:monetdb:FILETRANS:"));
         assert!(response.contains("auto_commit=1"));
+        // reply_size=-1 ("unlimited") must always be sent once the server
+        // supports level 2 — the server's own default (100) silently
+        // truncates any larger result set with no error (verified against
+        // a real 5000-row query; see HandshakeOptions::reply_size's doc).
+        assert!(response.contains("reply_size=-1"));
         assert!(response.contains("size_header=1"));
         assert!(response.ends_with(':'));
     }
 
     #[test]
-    fn build_login_response_omits_size_header_below_level_3() {
+    fn build_login_response_omits_higher_level_options_below_their_level() {
         let challenge = Challenge {
             salt: "salt".to_string(),
             server_type: "mserver".to_string(),
@@ -428,10 +449,14 @@ mod tests {
             "SHA1",
             "deadbeef",
             "monetdb",
-            HandshakeOptions { auto_commit: false },
+            HandshakeOptions {
+                auto_commit: false,
+                reply_size: -1,
+            },
         );
 
         assert!(response.contains("auto_commit=0"));
+        assert!(!response.contains("reply_size"));
         assert!(!response.contains("size_header"));
     }
 

@@ -343,4 +343,92 @@ mod docker_tests {
 
         conn.close().await.expect("close should succeed");
     }
+
+    /// Verifies `Pool<Monet>` — which sqlx-core provides generically, this
+    /// driver writes no pool code of its own — actually works: concurrent
+    /// `&pool` executor usage across multiple physical connections.
+    #[tokio::test]
+    #[ignore = "requires a running MonetDB docker instance; see docs/DEVELOPMENT.md stage I"]
+    async fn pool_supports_concurrent_queries() {
+        use sqlx_core::pool::{Pool, PoolOptions};
+
+        let options = MonetConnectOptions::new()
+            .host("127.0.0.1")
+            .port(test_port())
+            .username("monetdb")
+            .password("monetdb")
+            .database("monetdb");
+
+        let pool: Pool<Monet> = PoolOptions::new()
+            .max_connections(5)
+            .connect_with(options)
+            .await
+            .expect("pool should connect");
+
+        let tasks = (0..10).map(|i| {
+            let pool = pool.clone();
+            tokio::spawn(async move {
+                let rows = Executor::fetch_all(&pool, "SELECT 1")
+                    .await
+                    .unwrap_or_else(|e| panic!("query {i} failed: {e}"));
+                assert_eq!(rows.len(), 1);
+            })
+        });
+
+        for task in tasks {
+            task.await.expect("task should not panic");
+        }
+
+        pool.close().await;
+    }
+
+    /// **Important limitation check, not just a happy-path test**: this
+    /// driver never negotiates `reply_size` (docs/DEVELOPMENT.md §4.1
+    /// handshake option level 2) and doesn't implement `Xexport`
+    /// pagination (`docs/DEVELOPMENT.md` step 32's known gap). If the
+    /// server's default reply_size is smaller than a result set, rows
+    /// would be silently truncated with no error. This test proves (or
+    /// disproves) that risk against a concrete row count.
+    #[tokio::test]
+    #[ignore = "requires a running MonetDB docker instance; see docs/DEVELOPMENT.md known limitations"]
+    async fn large_result_set_is_not_silently_truncated() {
+        let mut conn = connect(test_port()).await;
+
+        let _ = Executor::execute(&mut conn, "DROP TABLE sqlx_monetdb_truncation_test").await;
+        Executor::execute(
+            &mut conn,
+            "CREATE TABLE sqlx_monetdb_truncation_test (n INT)",
+        )
+        .await
+        .expect("CREATE TABLE should succeed");
+
+        const ROW_COUNT: usize = 5000;
+        let values: Vec<String> = (0..ROW_COUNT).map(|n| format!("({n})")).collect();
+        let insert_sql = format!(
+            "INSERT INTO sqlx_monetdb_truncation_test VALUES {}",
+            values.join(", ")
+        );
+        Executor::execute(&mut conn, sqlx_core::sql_str::AssertSqlSafe(insert_sql))
+            .await
+            .expect("bulk INSERT should succeed");
+
+        let rows = Executor::fetch_all(&mut conn, "SELECT n FROM sqlx_monetdb_truncation_test")
+            .await
+            .expect("SELECT should succeed");
+
+        Executor::execute(&mut conn, "DROP TABLE sqlx_monetdb_truncation_test")
+            .await
+            .expect("cleanup DROP TABLE should succeed");
+
+        assert_eq!(
+            rows.len(),
+            ROW_COUNT,
+            "got {} of {ROW_COUNT} rows back — large result sets ARE being \
+             silently truncated by the server's default reply_size; \
+             docs/DEVELOPMENT.md must be updated and reply_size=0 (unlimited) \
+             negotiated in the handshake before this driver is safe for \
+             anything beyond small result sets",
+            rows.len()
+        );
+    }
 }
